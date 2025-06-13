@@ -1,51 +1,116 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   IconDocumentText, IconPhoto, IconVideoCamera, IconGift, IconChevronRight, IconSparkles, IconBolt, IconLightBulb,
   IconMegaphone, IconEnvelope, IconAtSymbol, IconGlobeAlt, PROMPT_SUGGESTIONS, RECENT_PROJECTS_DEMO,
+  API_KEY_WARNING, GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL,
   IconAdjustmentsHorizontal, IconBarsArrowDown, IconHandThumbUp, IconEllipsisVertical
 } from '../constants';
 import { MarketingCopyType, GeneratedItem, ContentCreationType, GeneratedTextItem, GeneratedImageItem } from '../types';
+// Use direct CDN import for @google/genai to help Vite's resolver
+import { GoogleGenAI, GenerateContentResponse } from "https://esm.sh/@google/genai@0.13.0";
 
 const ContentGenerationPage: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [selectedCreationType, setSelectedCreationType] = useState<ContentCreationType>(ContentCreationType.Copy);
   const [selectedMarketingCopyType, setSelectedMarketingCopyType] = useState<MarketingCopyType | null>(MarketingCopyType.AdCopy);
-  const [generatedItems, setGeneratedItems] = useState<GeneratedItem[]>([]); // To store generated content
+  const [generatedItems, setGeneratedItems] = useState<GeneratedItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [ai, setAi] = useState<GoogleGenAI | null>(null);
+  const [apiKeyMissing, setApiKeyMissing] = useState(false);
+
+  useEffect(() => {
+    // API_KEY is expected to be injected by Vite's `define` config from vite.config.js
+    // Ensure `process.env.API_KEY` is correctly defined in your vite.config.js
+    const apiKey = process.env.API_KEY;
+
+    if (apiKey) {
+      try {
+        setAi(new GoogleGenAI({ apiKey: apiKey }));
+        setApiKeyMissing(false);
+      } catch (error) {
+        console.error("Error initializing GoogleGenAI:", error);
+        alert("Failed to initialize AI client. Check API Key and console for details.");
+        setApiKeyMissing(true);
+      }
+    } else {
+      console.warn(API_KEY_WARNING);
+      setApiKeyMissing(true);
+    }
+  }, []);
 
   const handleGenerateContent = async () => {
-    if (!prompt) {
+    if (apiKeyMissing) {
+      alert(API_KEY_WARNING + "\nPlease ensure GEMINI_API_KEY is set in your .env file and defined in vite.config.js, then restart the server.");
+      return;
+    }
+    if (!ai) {
+      alert("AI client is not initialized. Please ensure your API key is correctly set up and the page has fully loaded.");
+      return;
+    }
+    if (!prompt.trim()) {
       alert('Please enter a description for what you want to create.');
       return;
     }
-    setIsLoading(true);
-    // Placeholder for API call
-    console.log('Generating content for:', prompt, selectedCreationType, selectedMarketingCopyType);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    let newItem: GeneratedItem;
 
-    if (selectedCreationType === ContentCreationType.Image) {
-      newItem = {
-        id: Date.now().toString(),
-        type: 'Generated Image',
-        imageUrl: `https://picsum.photos/seed/${Date.now().toString()}/400/300`, // Placeholder image
-        prompt: prompt,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      } as GeneratedImageItem;
-    } else {
-      newItem = {
-        id: Date.now().toString(),
-        type: selectedMarketingCopyType || 'Generated Text',
-        content: `This is a generated ${selectedMarketingCopyType || 'text result'} for: "${prompt}". \n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      } as GeneratedTextItem;
+    setIsLoading(true);
+    let newItem: GeneratedItem | null = null;
+
+    try {
+      if (selectedCreationType === ContentCreationType.Image) {
+        const response = await ai.models.generateImages({
+          model: GEMINI_IMAGE_MODEL,
+          prompt: prompt,
+          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' },
+        });
+
+        if (response.generatedImages && response.generatedImages.length > 0 && response.generatedImages[0].image?.imageBytes) {
+          const base64ImageBytes = response.generatedImages[0].image.imageBytes;
+          const imageUrl = `data:image/jpeg;base64,${base64ImageBytes}`;
+          newItem = {
+            id: Date.now().toString(),
+            type: 'Generated Image',
+            imageUrl: imageUrl,
+            prompt: prompt,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          } as GeneratedImageItem;
+        } else {
+          console.error("Image generation response error:", response);
+          throw new Error("No image generated or invalid response from API. Check console for details.");
+        }
+      } else { // Text generation
+        const fullPrompt = selectedMarketingCopyType
+          ? `Generate ${selectedMarketingCopyType} for: "${prompt}"`
+          : prompt;
+
+        const response: GenerateContentResponse = await ai.models.generateContent({
+          model: GEMINI_TEXT_MODEL,
+          contents: fullPrompt,
+        });
+        
+        const text = response.text; // Use the direct .text accessor
+        if (typeof text !== 'string' || !text.trim()) {
+          console.error('Received non-text or empty response:', response);
+          throw new Error("No text generated or invalid response from API. Check console for details.");
+        }
+        
+        newItem = {
+          id: Date.now().toString(),
+          type: selectedMarketingCopyType || 'Generated Text',
+          content: text.trim(),
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        } as GeneratedTextItem;
+      }
+
+      if (newItem) {
+        setGeneratedItems(prev => [newItem!, ...prev]);
+      }
+    } catch (error) {
+      console.error('Error generating content:', error);
+      alert(`Failed to generate content. ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsLoading(false);
     }
-    
-    setGeneratedItems(prev => [newItem, ...prev]);
-    setIsLoading(false);
   };
   
   const contentTypes = [
@@ -64,6 +129,12 @@ const ContentGenerationPage: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto animate-fadeIn">
+      {apiKeyMissing && (
+        <div className="mb-4 p-4 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg" role="alert">
+          <p className="font-bold">API Key Configuration Issue</p>
+          <p>{API_KEY_WARNING} Please ensure GEMINI_API_KEY is set in your .env file, correctly defined in vite.config.js as process.env.API_KEY, and the dev server was restarted.</p>
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Content Type Selector */}
         <div className="bg-white rounded-xl shadow-lg p-6 lg:col-span-1">
@@ -81,12 +152,14 @@ const ContentGenerationPage: React.FC = () => {
                   }
                 }}
                 className={`w-full flex items-center justify-between p-4 border rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2
-                                ${selectedCreationType === ct.id ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50' : 'border-slate-300 hover:border-indigo-400 hover:bg-indigo-50'}`}
+                                ${selectedCreationType === ct.id ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50' : 'border-slate-300 hover:border-indigo-400 hover:bg-indigo-50'}
+                                ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50 cursor-not-allowed' : '' }`}
                 aria-pressed={selectedCreationType === ct.id}
+                disabled={ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) }
               >
                 <span className="flex items-center">
-                  <ct.icon className={`w-5 h-5 mr-3 ${ct.color}`} />
-                  <span className="font-medium text-sm text-slate-700">{ct.label}</span>
+                  <ct.icon className={`w-5 h-5 mr-3 ${ct.color} ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50' : '' }`} />
+                  <span className={`font-medium text-sm text-slate-700 ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50' : '' }`}>{ct.label}</span>
                 </span>
                 <IconChevronRight className="w-4 h-4 text-slate-400" />
               </button>
@@ -110,7 +183,6 @@ const ContentGenerationPage: React.FC = () => {
             <h2 className="text-lg font-semibold text-slate-800">
               Generate {contentTypes.find(ct => ct.id === selectedCreationType)?.label || 'Content'}
             </h2>
-            {/* Action buttons (History, Templates) can be added here */}
           </div>
 
           <div className="mb-6">
@@ -120,7 +192,7 @@ const ContentGenerationPage: React.FC = () => {
             <div className="relative">
               <textarea
                 id="prompt-input"
-                className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none focus:border-indigo-500 transition-all text-sm"
+                className="w-full p-3 pr-12 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none focus:border-indigo-500 transition-all text-sm"
                 rows={4}
                 placeholder={
                   selectedCreationType === ContentCreationType.Image 
@@ -134,9 +206,9 @@ const ContentGenerationPage: React.FC = () => {
               <button 
                 title="Generate with AI"
                 aria-label="Generate with AI"
-                className="absolute bottom-3 right-3 bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
+                className="absolute bottom-3 right-3 bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleGenerateContent}
-                disabled={isLoading}
+                disabled={isLoading || apiKeyMissing || !prompt.trim()}
               >
                 <IconSparkles className="w-5 h-5" />
               </button>
@@ -165,8 +237,8 @@ const ContentGenerationPage: React.FC = () => {
 
           <button
             onClick={handleGenerateContent}
-            disabled={isLoading || !prompt}
-            className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+            disabled={isLoading || !prompt.trim() || apiKeyMissing}
+            className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Generate content button"
           >
             {isLoading ? (
@@ -185,7 +257,7 @@ const ContentGenerationPage: React.FC = () => {
             )}
           </button>
 
-          {PROMPT_SUGGESTIONS.length > 0 && (
+          {PROMPT_SUGGESTIONS.length > 0 && !isLoading && (
             <div className="mt-8 border-t border-slate-200 pt-6">
               <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center">
                 <IconLightBulb className="w-5 h-5 text-yellow-500 mr-2" />
