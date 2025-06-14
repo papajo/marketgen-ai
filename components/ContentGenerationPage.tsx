@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import {
   IconDocumentText, IconPhoto, IconVideoCamera, IconGift, IconChevronRight, IconSparkles, IconBolt, IconLightBulb,
   IconMegaphone, IconEnvelope, IconAtSymbol, IconGlobeAlt, PROMPT_SUGGESTIONS, RECENT_PROJECTS_DEMO,
-  API_KEY_WARNING, GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL,
+  API_KEY_WARNING, GEMINI_TEXT_MODEL,
   IconAdjustmentsHorizontal, IconBarsArrowDown, IconHandThumbUp, IconEllipsisVertical
 } from '../constants';
 import { MarketingCopyType, GeneratedItem, ContentCreationType, GeneratedTextItem, GeneratedImageItem } from '../types';
@@ -20,8 +20,6 @@ const ContentGenerationPage: React.FC = () => {
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
 
   useEffect(() => {
-    // API_KEY is expected to be injected by Vite's `define` config from vite.config.js
-    // Ensure `process.env.API_KEY` is correctly defined in your vite.config.js
     const apiKey = process.env.API_KEY;
 
     if (apiKey) {
@@ -36,18 +34,11 @@ const ContentGenerationPage: React.FC = () => {
     } else {
       console.warn(API_KEY_WARNING);
       setApiKeyMissing(true);
+      // For text generation, AI client is essential. For Picsum images, it's not.
     }
   }, []);
 
   const handleGenerateContent = async () => {
-    if (apiKeyMissing) {
-      alert(API_KEY_WARNING + "\nPlease ensure GEMINI_API_KEY is set in your .env file and defined in vite.config.js, then restart the server.");
-      return;
-    }
-    if (!ai) {
-      alert("AI client is not initialized. Please ensure your API key is correctly set up and the page has fully loaded.");
-      return;
-    }
     if (!prompt.trim()) {
       alert('Please enter a description for what you want to create.');
       return;
@@ -58,27 +49,33 @@ const ContentGenerationPage: React.FC = () => {
 
     try {
       if (selectedCreationType === ContentCreationType.Image) {
-        const response = await ai.models.generateImages({
-          model: GEMINI_IMAGE_MODEL,
-          prompt: prompt,
-          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' },
-        });
+        // Use Picsum Photos for image generation
+        const seed = prompt.trim() || Date.now().toString();
+        const imageUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/500/350`;
+        
+        // Simulate API call delay for UX consistency
+        await new Promise(resolve => setTimeout(resolve, 500)); 
 
-        if (response.generatedImages && response.generatedImages.length > 0 && response.generatedImages[0].image?.imageBytes) {
-          const base64ImageBytes = response.generatedImages[0].image.imageBytes;
-          const imageUrl = `data:image/jpeg;base64,${base64ImageBytes}`;
-          newItem = {
-            id: Date.now().toString(),
-            type: 'Generated Image',
-            imageUrl: imageUrl,
-            prompt: prompt,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          } as GeneratedImageItem;
-        } else {
-          console.error("Image generation response error:", response);
-          throw new Error("No image generated or invalid response from API. Check console for details.");
+        newItem = {
+          id: Date.now().toString(),
+          type: 'Generated Image',
+          imageUrl: imageUrl,
+          prompt: prompt,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        } as GeneratedImageItem;
+
+      } else { // Text generation using Gemini
+        if (apiKeyMissing) {
+          alert(API_KEY_WARNING + "\nPlease ensure GEMINI_API_KEY is set in your .env file and defined in vite.config.js, then restart the server. Text generation requires a valid API key.");
+          setIsLoading(false);
+          return;
         }
-      } else { // Text generation
+        if (!ai) {
+          alert("AI client is not initialized for text generation. Please ensure your API key is correctly set up and the page has fully loaded.");
+          setIsLoading(false);
+          return;
+        }
+
         const fullPrompt = selectedMarketingCopyType
           ? `Generate ${selectedMarketingCopyType} for: "${prompt}"`
           : prompt;
@@ -88,9 +85,9 @@ const ContentGenerationPage: React.FC = () => {
           contents: fullPrompt,
         });
         
-        const text = response.text; // Use the direct .text accessor
+        const text = response.text;
         if (typeof text !== 'string' || !text.trim()) {
-          console.error('Received non-text or empty response:', response);
+          console.error('Received non-text or empty response for text generation:', response);
           throw new Error("No text generated or invalid response from API. Check console for details.");
         }
         
@@ -115,7 +112,7 @@ const ContentGenerationPage: React.FC = () => {
   
   const contentTypes = [
     { id: ContentCreationType.Copy, label: 'Marketing Copy', icon: IconDocumentText, color: 'text-blue-500', description: 'Generate ads, emails, social posts' },
-    { id: ContentCreationType.Image, label: 'Images', icon: IconPhoto, color: 'text-purple-500', description: 'Create stunning visuals' },
+    { id: ContentCreationType.Image, label: 'Images', icon: IconPhoto, color: 'text-purple-500', description: 'Create stunning visuals (free)' },
     { id: ContentCreationType.Video, label: 'Videos', icon: IconVideoCamera, color: 'text-green-500', description: 'Produce engaging video (soon)' },
     { id: ContentCreationType.GIF, label: 'GIFs', icon: IconGift, color: 'text-red-500', description: 'Make fun animated GIFs (soon)' },
   ];
@@ -127,12 +124,16 @@ const ContentGenerationPage: React.FC = () => {
     { type: MarketingCopyType.Website, icon: IconGlobeAlt, color: 'text-green-500' },
   ];
 
+  const isTextGenerationDisabled = apiKeyMissing && selectedCreationType === ContentCreationType.Copy;
+  const isGenerateButtonDisabled = isLoading || !prompt.trim() || (selectedCreationType === ContentCreationType.Copy && apiKeyMissing);
+
+
   return (
     <div className="max-w-7xl mx-auto animate-fadeIn">
-      {apiKeyMissing && (
+      {apiKeyMissing && selectedCreationType === ContentCreationType.Copy && (
         <div className="mb-4 p-4 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg" role="alert">
-          <p className="font-bold">API Key Configuration Issue</p>
-          <p>{API_KEY_WARNING} Please ensure GEMINI_API_KEY is set in your .env file, correctly defined in vite.config.js as process.env.API_KEY, and the dev server was restarted.</p>
+          <p className="font-bold">API Key Configuration Issue for Text Generation</p>
+          <p>{API_KEY_WARNING} Please ensure GEMINI_API_KEY is set in your .env file, correctly defined in vite.config.js as process.env.API_KEY, and the dev server was restarted. Image generation will use a free service and is unaffected.</p>
         </div>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -159,7 +160,7 @@ const ContentGenerationPage: React.FC = () => {
               >
                 <span className="flex items-center">
                   <ct.icon className={`w-5 h-5 mr-3 ${ct.color} ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50' : '' }`} />
-                  <span className={`font-medium text-sm text-slate-700 ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50' : '' }`}>{ct.label}</span>
+                  <span className={`font-medium text-sm text-slate-700 ${ (ct.id === ContentCreationType.Video || ct.id === ContentCreationType.GIF) ? 'opacity-50' : '' }`}>{ct.label} ({ct.description})</span>
                 </span>
                 <IconChevronRight className="w-4 h-4 text-slate-400" />
               </button>
@@ -196,7 +197,7 @@ const ContentGenerationPage: React.FC = () => {
                 rows={4}
                 placeholder={
                   selectedCreationType === ContentCreationType.Image 
-                  ? "e.g., A futuristic cityscape at sunset, neon lights, flying cars..."
+                  ? "e.g., A happy dog playing with a ball in a sunny park (seed for Picsum Photos)"
                   : "e.g., Facebook ad for new eco-friendly water bottles targeting millennials..."
                 }
                 value={prompt}
@@ -208,7 +209,7 @@ const ContentGenerationPage: React.FC = () => {
                 aria-label="Generate with AI"
                 className="absolute bottom-3 right-3 bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleGenerateContent}
-                disabled={isLoading || apiKeyMissing || !prompt.trim()}
+                disabled={isGenerateButtonDisabled}
               >
                 <IconSparkles className="w-5 h-5" />
               </button>
@@ -224,11 +225,13 @@ const ContentGenerationPage: React.FC = () => {
                     key={opt.type}
                     onClick={() => setSelectedMarketingCopyType(opt.type)}
                     className={`border p-3 rounded-lg text-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1
-                                  ${selectedMarketingCopyType === opt.type ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50' : 'border-slate-300 hover:border-indigo-400 hover:bg-indigo-50'}`}
+                                  ${selectedMarketingCopyType === opt.type ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50' : 'border-slate-300 hover:border-indigo-400 hover:bg-indigo-50'}
+                                  ${isTextGenerationDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                     aria-pressed={selectedMarketingCopyType === opt.type}
+                    disabled={isTextGenerationDisabled}
                   >
-                    <opt.icon className={`w-5 h-5 mb-1 mx-auto ${opt.color}`} />
-                    <div className="text-xs font-medium text-slate-700">{opt.type}</div>
+                    <opt.icon className={`w-5 h-5 mb-1 mx-auto ${opt.color} ${isTextGenerationDisabled ? 'opacity-50' : ''}`} />
+                    <div className={`text-xs font-medium text-slate-700 ${isTextGenerationDisabled ? 'opacity-50' : ''}`}>{opt.type}</div>
                   </button>
                 ))}
               </div>
@@ -237,7 +240,7 @@ const ContentGenerationPage: React.FC = () => {
 
           <button
             onClick={handleGenerateContent}
-            disabled={isLoading || !prompt.trim() || apiKeyMissing}
+            disabled={isGenerateButtonDisabled}
             className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Generate content button"
           >
